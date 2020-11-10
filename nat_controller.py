@@ -266,26 +266,80 @@ class NatController(app_manager.RyuApp):
 
         # TCP and UDP: Translate using nat rules and forwarded
 
-        # ORIGINATES INSIDE
-        '''
-        For TCP or UDP messages originating in the internal network and destined for 
-        any other node outside this network, the message should be translated using NAT 
-        rules and forwarded as appropriate to its final destination.
-        '''          
+        switch = of_packet.datapath
+        ofproto = switch.ofproto
+        parser = switch.ofproto_parser
 
-        # ORIGINATES OUTSIDE
-        '''
-        For TCP or UDP messages originating in the external network with a destination IP 
-        linked to the NAT network, perform the appropriate changes in the message to deliver 
-        it to its intended destination. 
-        '''
+        eth = data_packet.get_protocols(ethernet.ethernet)[0]
+        dst_mac = eth.dst
+        src_mac = eth.src
+        out_port = None
 
-        '''
-        For TCP or UDP messages originating in the external network but with no NAT rule created 
-        in the previous items, the message should be dropped. Note that this assignment will not 
-        implement a user-defined translation table, UPnP or other similar methods used when the server 
-        is inside the NAT.
-        '''
+        if dst_mac in self.switch_table:
+            out_port = self.switch_table[dst_mac]
+        else:
+            out_port = of_packet.datapath.ofproto.OFPP_FLOOD
+
+        if (self.is_ipv4(data_packet)):
+            ip = data_packet.get_protocol(ipv4.ipv4)
+            src_ip = ip.src
+            dst_ip = ip.dst
+            protocol = ip.proto
+
+            # ORIGINATES INSIDE
+            '''
+            For TCP or UDP messages originating in the internal network and destined for 
+            any other node outside this network, the message should be translated using NAT 
+            rules and forwarded as appropriate to its final destination.
+            '''
+            if (self.is_internal_network(src_ip)):
+                if protocol == in_proto.IPPROTO_TCP:
+                    tcp_proto = data_packet.get_protocol(tcp.tcp)
+                    internal_src_port = tcp_proto.src_port
+                    internal_src_addr = src_ip
+
+                    entry = (internal_src_addr, internal_src_port)
+                    ext_port = self.add_nat_entry(entry) 
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, tcp_src=tcp_proto.src_port, tcp_dst=tcp_proto.dst_port)
+                    actions = [parser.OFPActionSetField(ipv4_src=config.nat_external_ip),
+                       parser.OFPActionSetField(tcp_src=ext_port),
+                       parser.OFPActionSetField(eth_src=config.nat_external_mac),
+                       parser.OFPActionOutput(out_port)]
+
+                elif protocol == in_proto.IPPROTO_UDP:
+                    udp_proto = data_packet.get_protocol(udp.udp)
+                    internal_src_port = udp_proto.src_port
+                    internal_src_addr = src_ip
+
+                    entry = (internal_src_addr, internal_src_port)
+                    ext_port = self.add_nat_entry(entry) 
+                    
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, udp_src=udp_proto.src_port, udp_dst=udp_proto.dst_port)
+                    actions = [parser.OFPActionSetField(ipv4_src=config.nat_external_ip),
+                       parser.OFPActionSetField(udp_src=ext_port),
+                       parser.OFPActionSetField(eth_src=config.nat_external_mac),
+                       parser.OFPActionOutput(out_port)]
+
+            # ORIGINATES OUTSIDE
+            '''
+            For TCP or UDP messages originating in the external network with a destination IP 
+            linked to the NAT network, perform the appropriate changes in the message to deliver 
+            it to its intended destination. 
+            '''
+
+            '''
+            For TCP or UDP messages originating in the external network but with no NAT rule created 
+            in the previous items, the message should be dropped. Note that this assignment will not 
+            implement a user-defined translation table, UPnP or other similar methods used when the server 
+            is inside the NAT.
+            '''
+            else:
+
+
+
+
+
+
         pass
 
 
@@ -377,7 +431,7 @@ class NatController(app_manager.RyuApp):
                        parser.OFPActionOutput(out_port)]
 
                 self.add_flow(switch, match, actions)
-                self.switch_forward(of_packet, data_packet, actions)
+                self.router_forward(of_packet, data_packet, dst_ip, match, actions)
 
         '''
         For TCP or UDP messages originating in the internal network and destined for any other 
