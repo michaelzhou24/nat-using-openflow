@@ -24,6 +24,7 @@ class NatController(app_manager.RyuApp):
         self.pending_arp = {}
         self.ports_in_use = {}
         # Key: tuple(ip, port) Value: nat ip (internal/external, need to swap src/dst with this)
+        self.nat_port = 3000
         self.nat_translation = {}
 
 
@@ -72,6 +73,7 @@ class NatController(app_manager.RyuApp):
             dst_port = self.switch_table[dst_mac]
         else:
             dst_port = of_packet.datapath.ofproto.OFPP_FLOOD
+        print("forwarding packet %s" % data_packet)
         self.send_packet(of_packet.data, of_packet, dst_port, actions=actions)
 
     def router_next_hop(self, parser, src_mac, dst_mac):
@@ -320,7 +322,7 @@ class NatController(app_manager.RyuApp):
             print("src:%s\ndst:%s\nprotocol:%s" %(src_ip, dst_ip, protocol))
 
             if (self.is_internal_network(dst_ip)):
-
+                self.debug("~~~~handling internal->internal")
                 actions = [parser.OFPActionOutput(out_port)]
 
                 # if ICMP Protocol
@@ -337,6 +339,43 @@ class NatController(app_manager.RyuApp):
                     udp_proto = data_packet.get_protocol(udp.udp)
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, udp_src=udp_proto.src_port, udp_dst=udp_proto.dst_port)
                 
+                self.add_flow(switch, match, actions)
+                self.switch_forward(of_packet, data_packet, actions)
+            
+            # Packet destination is outside of the network
+            # elif arp_dst_ip == config.nat_external_ip:
+            #     arp_dst_mac = config.nat_external_mac
+            # public port = key 
+            # internal src addr, src port as value
+            else:
+                self.debug("~~~handle internal->external")
+                if protocol == in_proto.IPPROTO_TCP:
+                    tcp_proto = data_packet.get_protocol(tcp.tcp)
+                    internal_src_port = tcp_proto.src_port
+                    internal_src_addr = src_ip
+
+                    entry = (internal_src_addr, internal_src_port)
+                    ext_port = self.add_nat_entry(entry) 
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, tcp_src=tcp_proto.src_port, tcp_dst=tcp_proto.dst_port)
+                    actions = [parser.OFPActionSetField(ipv4_src=config.nat_external_ip),
+                       parser.OFPActionSetField(tcp_src=ext_port),
+                       parser.OFPActionSetField(eth_src=config.nat_external_mac),
+                       parser.OFPActionOutput(out_port)]
+
+                elif protocol == in_proto.IPPROTO_UDP:
+                    udp_proto = data_packet.get_protocol(udp.udp)
+                    internal_src_port = udp_proto.src_port
+                    internal_src_addr = src_ip
+
+                    entry = (internal_src_addr, internal_src_port)
+                    ext_port = self.add_nat_entry(entry) 
+                    
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, udp_src=udp_proto.src_port, udp_dst=udp_proto.dst_port)
+                    actions = [parser.OFPActionSetField(ipv4_src=config.nat_external_ip),
+                       parser.OFPActionSetField(udp_src=ext_port),
+                       parser.OFPActionSetField(eth_src=config.nat_external_mac),
+                       parser.OFPActionOutput(out_port)]
+
                 self.add_flow(switch, match, actions)
                 self.switch_forward(of_packet, data_packet, actions)
 
@@ -369,3 +408,9 @@ class NatController(app_manager.RyuApp):
 
     def debug(self, str):
         print(str)
+
+    def add_nat_entry(self, internal_entry):
+        cur_port = self.nat_port
+        self.nat_translation[str(cur_port)] = internal_entry
+        self.nat_port = self.nat_port + 1
+        return cur_port
