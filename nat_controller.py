@@ -7,7 +7,7 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ether, ofproto_v1_0, ofproto_v1_2, ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp, udp
+from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp, udp, in_proto
 from ryu.lib import mac, addrconv
 
 import nat_config as config
@@ -153,6 +153,7 @@ class NatController(app_manager.RyuApp):
             del self.pending_arp[arp_src_ip]
 
         if data_packet[1].opcode == 2:
+            # ARP reply
             self.debug("~~~~forwarding arp response packet")
             self.switch_forward(of_packet, data_packet)
         
@@ -292,8 +293,6 @@ class NatController(app_manager.RyuApp):
         For messages originating in the internal network and destined for another node
         in the internal network, the message should just be forwarded to the appropriate node.
         '''
-        of_packet = event.msg # openflow packet
-        data_packet = packet.Packet(data=of_packet.data) # decapsulated packet
         switch = of_packet.datapath
         ofproto = switch.ofproto
         parser = switch.ofproto_parser
@@ -301,9 +300,42 @@ class NatController(app_manager.RyuApp):
         eth = data_packet.get_protocols(ethernet.ethernet)[0]
         dst_mac = eth.dst
         src_mac = eth.src
-        print(dst_mac)
-        print(src_mac)
+        out_port = None
 
+
+        if dst_mac in self.switch_table:
+            out_port = self.switch_table[dst_mac]
+        else:
+            out_port = of_packet.datapath.ofproto.OFPP_FLOOD
+
+        if (self.is_ipv4(data_packet)):
+            ip = data_packet.get_protocol(ipv4.ipv4)
+            src_ip = ip.src
+            dst_ip = ip.dst
+            protocol = ip.proto
+
+            print("src:%s\ndst:%s\nprotocol:%s" %(src_ip, dst_ip, protocol))
+
+            if (self.is_internal_network(dst_ip)):
+
+                actions = [parser.OFPActionOutput(out_port)]
+
+                # if ICMP Protocol
+                if protocol == in_proto.IPPROTO_ICMP:
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol)
+
+                #  if TCP Protocol
+                elif protocol == in_proto.IPPROTO_TCP:
+                    tcp_proto = data_packet.get_protocol(tcp.tcp)
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, tcp_src=tcp_proto.src_port, tcp_dst=tcp_proto.dst_port)
+            
+                #  If UDP Protocol 
+                elif protocol == in_proto.IPPROTO_UDP:
+                    udp_proto = data_packet.get_protocol(udp.udp)
+                    match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=src_ip, ipv4_dst=dst_ip, ip_proto=protocol, udp_src=udp_proto.src_port, udp_dst=udp_proto.dst_port)
+                
+                self.add_flow(switch, match, actions)
+                self.switch_forward(of_packet, data_packet, actions)
 
         # dst_michael = data_packet[1].michael
         '''
