@@ -66,7 +66,7 @@ class NatController(app_manager.RyuApp):
         dst_mac = data_packet[0].dst
 
         if dst_mac in self.switch_table:
-            dst_port = self.switch_table[src_mac]
+            dst_port = self.switch_table[dst_mac]
         else:
             dst_port = of_packet.datapath.ofproto.OFPP_FLOOD
         self.send_packet(of_packet.data, of_packet, dst_port, actions=actions)
@@ -151,10 +151,16 @@ class NatController(app_manager.RyuApp):
                 self.router_forward(of_packet, packet.Packet(data=of_packet.data), arp_src_ip,
                                     match=match, extra_actions=actions)
             del self.pending_arp[arp_src_ip]
+
+        if data_packet[1].opcode == 2:
+            self.debug("~~~~forwarding arp response packet")
+            self.switch_forward(of_packet, data_packet)
         
         if data_packet[1].opcode == 1:
             # ARP request
+            self.debug("~~~~sending arp reply")
             self.send_arp_reply(of_packet, data_packet)
+
 
     def send_arp_request(self, ip, of_packet, match, actions):
         '''Send an ARP request for an IP with unknown MAC address'''
@@ -203,10 +209,10 @@ class NatController(app_manager.RyuApp):
         elif arp_dst_ip == config.nat_external_ip:
             arp_dst_mac = config.nat_external_mac
         else:
+            self.switch_forward(of_packet, data_packet)
             return
 
         self.debug('Sending ARP reply: %s -> %s' % (arp_dst_ip, arp_dst_mac))
-
         eth_packet = ethernet.ethernet(dst=data_packet[1].src_mac,
                                        src=arp_dst_mac,
                                        ethertype=ether.ETH_TYPE_ARP)
@@ -223,6 +229,7 @@ class NatController(app_manager.RyuApp):
         new_packet.add_protocol(eth_packet)
         new_packet.add_protocol(arp_packet)
         new_packet.serialize()
+        self.debug('ARP reply: %s' % new_packet)
         self.send_packet(new_packet, of_packet, of_packet.datapath.ofproto.OFPP_IN_PORT)
 
     def is_arp(self, packet):
@@ -248,15 +255,83 @@ class NatController(app_manager.RyuApp):
 
     def handle_incoming_external_msg(self, of_packet, data_packet):
         '''Handles a packet with destination MAC equal to external side of NAT router.'''
-        
         # TODO Implement this function
+        # Swap src IP to external side of NAT router then send the packet
+
+        # TCP and UDP: Translate using nat rules and forwarded
+
+        # ORIGINATES INSIDE
+        '''
+        For TCP or UDP messages originating in the internal network and destined for 
+        any other node outside this network, the message should be translated using NAT 
+        rules and forwarded as appropriate to its final destination.
+        '''          
+
+        # ORIGINATES OUTSIDE
+        '''
+        For TCP or UDP messages originating in the external network with a destination IP 
+        linked to the NAT network, perform the appropriate changes in the message to deliver 
+        it to its intended destination. 
+        '''
+
+        '''
+        For TCP or UDP messages originating in the external network but with no NAT rule created 
+        in the previous items, the message should be dropped. Note that this assignment will not 
+        implement a user-defined translation table, UPnP or other similar methods used when the server 
+        is inside the NAT.
+        '''
         pass
+
 
     def handle_incoming_internal_msg(self, of_packet, data_packet):
         '''Handles a packet with destination MAC equal to internal side of NAT router.'''
-
+        print("In handling incoming internal msg")
         # TODO Implement this function
+        # ORIGINATES INSIDE
+        '''
+        For messages originating in the internal network and destined for another node
+        in the internal network, the message should just be forwarded to the appropriate node.
+        '''
+        of_packet = event.msg # openflow packet
+        data_packet = packet.Packet(data=of_packet.data) # decapsulated packet
+        switch = of_packet.datapath
+        ofproto = switch.ofproto
+        parser = switch.ofproto_parser
+
+        eth = data_packet.get_protocols(ethernet.ethernet)[0]
+        dst_mac = eth.dst
+        src_mac = eth.src
+        print(dst_mac)
+        print(src_mac)
+
+
+        # dst_michael = data_packet[1].michael
+        '''
+        For TCP or UDP messages originating in the internal network and destined for any other 
+        node outside this network, the message should be translated using NAT rules and forwarded 
+        as appropriate to its final destination.
+        '''
+
+        #track internal IP and port
+        #add to NAT table
+        #change src IP to external NAT ip, randomly generate port
+        #send the packet
+
         pass
+
+
+        '''
+        The rules above should, as much as possible, trigger flow updates in the switch itself, so that 
+        the controller is not required to handle all traversing messages related to individual connections. 
+        In other words, the switch should only send to the controller messages that it cannot handle on its 
+        own based on flow matches. In practice, this means that, beyond the initial three-way handshake for 
+        a TCP connection (and the equivalent initial messages for a UDP exchange), all future messages in that 
+        connection should be handled by the switch, not the controller. The rules must be dynamically created: 
+        you should not statically program the controller based on predetermined rules; the rules must be created 
+        based on actual traffic.
+
+        use add_flow to add flow updates
+        '''
 
     def debug(self, str):
         print(str)
