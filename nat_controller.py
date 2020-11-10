@@ -23,6 +23,9 @@ class NatController(app_manager.RyuApp):
         self.switch_table = {}
         self.pending_arp = {}
         self.ports_in_use = {}
+        # Key: tuple(ip, port) Value: nat ip (internal/external, need to swap src/dst with this)
+        self.nat_translation = {}
+
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def handle_packet_in(self, event):
@@ -337,7 +340,6 @@ class NatController(app_manager.RyuApp):
                 self.add_flow(switch, match, actions)
                 self.switch_forward(of_packet, data_packet, actions)
 
-        # dst_michael = data_packet[1].michael
         '''
         For TCP or UDP messages originating in the internal network and destined for any other 
         node outside this network, the message should be translated using NAT rules and forwarded 
