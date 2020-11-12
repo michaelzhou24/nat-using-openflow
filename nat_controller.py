@@ -308,7 +308,8 @@ class NatController(app_manager.RyuApp):
 
             if internal_ip_addr not in self.arp_table:
                 self.send_arp_request(internal_ip_addr, of_packet, None, None)
-                time.sleep(0.5)
+                # todo needed?
+                time.sleep(1)
             
             internal_host_mac = self.arp_table[internal_ip_addr]
 
@@ -334,7 +335,8 @@ class NatController(app_manager.RyuApp):
                     parser.OFPActionSetField(eth_src=config.nat_internal_mac),
                     parser.OFPActionSetField(eth_dst=internal_host_mac),
                     parser.OFPActionOutput(out_port)]
-
+                    
+            self.add_flow(switch, match, actions)
             self.switch_forward(of_packet, data_packet, actions)
         pass
 
