@@ -74,7 +74,7 @@ class NatController(app_manager.RyuApp):
             dst_port = self.switch_table[dst_mac]
         else:
             dst_port = of_packet.datapath.ofproto.OFPP_FLOOD
-        print("forwarding packet %s" % data_packet)
+        self.debug("forwarding packet %s" % data_packet)
         self.send_packet(of_packet.data, of_packet, dst_port, actions=actions)
 
     def router_next_hop(self, parser, src_mac, dst_mac):
@@ -157,11 +157,8 @@ class NatController(app_manager.RyuApp):
                 self.router_forward(of_packet, packet.Packet(data=of_packet.data), arp_src_ip,
                                     match=match, extra_actions=actions)
             del self.pending_arp[arp_src_ip]
-
-        if data_packet[1].opcode == 2:
-            # ARP reply
-            self.debug("~~~~forwarding arp response packet")
-            self.switch_forward(of_packet, data_packet)
+        
+        self.switch_forward(of_packet, data_packet)
         
         if data_packet[1].opcode == 1:
             # ARP request
@@ -216,7 +213,6 @@ class NatController(app_manager.RyuApp):
         elif arp_dst_ip == config.nat_external_ip:
             arp_dst_mac = config.nat_external_mac
         else:
-            self.switch_forward(of_packet, data_packet)
             return
 
         self.debug('Sending ARP reply: %s -> %s' % (arp_dst_ip, arp_dst_mac))
@@ -262,8 +258,6 @@ class NatController(app_manager.RyuApp):
 
     def handle_incoming_external_msg(self, of_packet, data_packet):
         '''Handles a packet with destination MAC equal to external side of NAT router.'''
-        # TODO Implement this function
-
         switch = of_packet.datapath
         ofproto = switch.ofproto
         parser = switch.ofproto_parser
@@ -338,13 +332,11 @@ class NatController(app_manager.RyuApp):
                     
             self.add_flow(switch, match, actions)
             self.switch_forward(of_packet, data_packet, actions)
-        pass
 
 
     def handle_incoming_internal_msg(self, of_packet, data_packet):
         '''Handles a packet with destination MAC equal to internal side of NAT router.'''
-        print("In handling incoming internal msg")
-        # TODO Implement this function
+        self.debug("In handling incoming internal msg")
         # ORIGINATES INSIDE
         '''
         For messages originating in the internal network and destined for another node
@@ -371,7 +363,7 @@ class NatController(app_manager.RyuApp):
             dst_ip = ip.dst
             protocol = ip.proto
 
-            print("src:%s\ndst:%s\nprotocol:%s" %(src_ip, dst_ip, protocol))
+            self.debug("src:%s\ndst:%s\nprotocol:%s" %(src_ip, dst_ip, protocol))
 
             if (self.is_internal_network(dst_ip)):
                 self.debug("~~~~handling internal->internal")
@@ -430,33 +422,6 @@ class NatController(app_manager.RyuApp):
 
                 self.add_flow(switch, match, actions)
                 self.router_forward(of_packet, data_packet, config.nat_gateway_ip, match, actions)
-
-        '''
-        For TCP or UDP messages originating in the internal network and destined for any other 
-        node outside this network, the message should be translated using NAT rules and forwarded 
-        as appropriate to its final destination.
-        '''
-
-        #track internal IP and port
-        #add to NAT table
-        #change src IP to external NAT ip, randomly generate port
-        #send the packet
-
-        pass
-
-
-        '''
-        The rules above should, as much as possible, trigger flow updates in the switch itself, so that 
-        the controller is not required to handle all traversing messages related to individual connections. 
-        In other words, the switch should only send to the controller messages that it cannot handle on its 
-        own based on flow matches. In practice, this means that, beyond the initial three-way handshake for 
-        a TCP connection (and the equivalent initial messages for a UDP exchange), all future messages in that 
-        connection should be handled by the switch, not the controller. The rules must be dynamically created: 
-        you should not statically program the controller based on predetermined rules; the rules must be created 
-        based on actual traffic.
-
-        use add_flow to add flow updates
-        '''
 
     def debug(self, str):
         print(str)
